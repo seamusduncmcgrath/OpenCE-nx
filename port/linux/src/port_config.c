@@ -51,6 +51,12 @@ enum
 	_platform_all = _platform_desktop | _platform_android,
 	/* (of the desktop builds, only Windows) */
 	_platform_windows = 4,
+	/* (the Switch build, which has Android's settings too: its guest is
+	the same, port/switch/README.md) */
+	_platform_switch = 8,
+	/* (of Android's settings, those of the app's own touch controls, which
+	the Switch build has not) */
+	_platform_android_app = 16,
 };
 
 struct config_setting
@@ -94,6 +100,22 @@ static const struct config_setting config_settings[] =
 	{ "display.screen_width", _config_integer, "0", "HALO_SCREEN_WIDTH", _environment_value, _platform_android,
 		"Columns of the 480-line picture: 0 for the display's shape, 640 for the\n"
 		"Xbox's 4:3." },
+	{ "display.docked_height", _config_integer, "1080", "HALO_DOCKED_HEIGHT", _environment_value, _platform_switch,
+		"The lines of pixels the game draws in the dock, of the television's\n"
+		"1080. Fewer (720, 480) draw faster, and are scaled up to it." },
+	{ "display.precompile_shaders", _config_boolean, "true", "HALO_PRECOMPILE_SHADERS", _environment_value,
+		_platform_switch,
+		"Make the shader programs that earlier runs used before the game starts\n"
+		"(a bar shows how far along it is), not in the middle of the game, where\n"
+		"each one stops it for a moment. The list is shader_list.bin in the data\n"
+		"folder." },
+	{ "display.render_thread", _config_boolean, "true", "HALO_RENDER_THREAD", _environment_value, _platform_switch,
+		"Draw on a second thread, on another of the console's cores: the game's\n"
+		"thread hands it each OpenGL call and goes on. false draws on the\n"
+		"game's thread, as before; try it if the picture is wrong." },
+	{ "display.handheld_height", _config_integer, "720", "HALO_HANDHELD_HEIGHT", _environment_value, _platform_switch,
+		"The lines of pixels the game draws out of the dock, of the console's\n"
+		"own screen's 720. Fewer (480) draw faster, and are scaled up to it." },
 	{ "display.vsync", _config_boolean, "true", "HALO_NO_VSYNC", _environment_set_is_false, _platform_all,
 		"Wait for the display between frames; false draws as fast as possible." },
 	{ "display.max_fps", _config_integer, "0", "HALO_MAX_FPS", _environment_value, _platform_desktop,
@@ -201,12 +223,14 @@ static const struct config_setting config_settings[] =
 		"loose_sounds_reload reads the files again and loose_sounds false gives\n"
 		"the map's sounds back." },
 
-	{ "input.touch_controls", _config_string, "\"auto\"", "HALO_TOUCH_CONTROLS", _environment_value, _platform_android,
+	{ "input.touch_controls", _config_string, "\"auto\"", "HALO_TOUCH_CONTROLS", _environment_value,
+		_platform_android_app,
 		"The on-screen touch controls in a game: \"auto\" shows them on a\n"
 		"touchscreen while no controller is connected, \"on\" also with a\n"
 		"controller, \"off\" never. A device without a touchscreen never shows\n"
 		"them. The menus take taps in any case." },
-	{ "input.touch_aim_assist", _config_boolean, "true", "HALO_TOUCH_AIM_ASSIST", _environment_value, _platform_android,
+	{ "input.touch_aim_assist", _config_boolean, "true", "HALO_TOUCH_AIM_ASSIST", _environment_value,
+		_platform_android_app,
 		"The touch controls' swipe aiming gets a controller's aim assist: the\n"
 		"aim slows over a target and follows a moving one. false: none, as a\n"
 		"mouse (the bullets' own autoaim stays)." },
@@ -555,12 +579,19 @@ static const struct config_setting config_settings[] =
 		"Megabytes a recording keeps in memory, 4 to 1024: two halves, each\n"
 		"written out as a part when it fills." },
 #endif
+	{ "debug.profile", _config_boolean, "false", NULL, _environment_value, _platform_switch,
+		"Find where the time goes (read by the program from the file,\n"
+		"port/switch/host/host_debug.c): a line in opence.log every two seconds,\n"
+		"and profile.txt, which tools/switch_profile.py reads. Not the profiling\n"
+		"build's recording (configure.py --profile)." },
 };
 
 #define NUMBER_OF_CONFIG_SETTINGS (sizeof(config_settings) / sizeof(config_settings[0]))
 
-#ifdef HALO_ANDROID
-#define CONFIG_PLATFORM _platform_android
+#ifdef HALO_SWITCH
+#define CONFIG_PLATFORM (_platform_android | _platform_switch)
+#elif defined(HALO_ANDROID)
+#define CONFIG_PLATFORM (_platform_android | _platform_android_app)
 #elif defined(_WIN32)
 #define CONFIG_PLATFORM (_platform_desktop | _platform_windows)
 #else

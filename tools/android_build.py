@@ -204,8 +204,10 @@ def fetch_third_party() -> None:
         subprocess.run(["git", "-C", str(SDL_DIR), "apply", str(SDL_ANDROID_MOUSE_PATCH.resolve())], check=True)
 
 
-def _musl_sources() -> List[Path]:
-    src = MUSL_DIR / "src"
+def musl_sources(musl_dir: Path) -> List[Path]:
+    """the part of musl (unpacked in musl_dir) that is the guest's C library;
+    the Switch build's guest has the same (tools/switch_build.py)"""
+    src = musl_dir / "src"
     result = set()
     for directory in MUSL_DIRECTORIES:
         for path in (src / directory).glob("*.c"):
@@ -222,6 +224,10 @@ def _musl_sources() -> List[Path]:
             continue
         sources.append(path)
     return sources
+
+
+def _musl_sources() -> List[Path]:
+    return musl_sources(MUSL_DIR)
 
 
 def android_configure_inputs() -> List[Path]:

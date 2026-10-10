@@ -1,7 +1,8 @@
 # Notes for agents
 
 This repository ports the Halo: Combat Evolved decompilation (Xbox build
-01.01.14.2342, `cachebeta.exe`) to Linux, Windows and Android. The game's C
+01.01.14.2342, `cachebeta.exe`) to Linux, Windows, Android and the Nintendo
+Switch (homebrew). The game's C
 sources are the decompilation; the port adds a platform layer that
 implements the Xbox APIs the game calls, and features the Xbox game did not
 have (a new netcode, internet play, the PC version's menus, Custom Edition
@@ -21,10 +22,11 @@ end.
 | `port/include/xdk/` | Stand-ins for the Xbox SDK's headers (declarations only) |
 | `port/windows/` | The Windows build's own files (`win32_*.c`, headers) |
 | `port/android/` | The Android app: the guest runtime, the host library (`host/`), the Java app (`app/`), host imports (`host_imports.list`) |
+| `port/switch/` | The Switch homebrew program: a host (`host/`, libnx, SDL2, Mesa) that runs the Android build's guest, with a render thread |
 | `port/assets/` | What the builds embed or ship: high-res HUD (`hud/`), fonts, titles, menus (`menus/`), icons, network brokers |
 | `port/third_party/` | Vendored libraries, each with a README naming its upstream, version and checksum |
 | `port/tools/` | Stand-alone tools (`cache_file_report.c`) |
-| `tools/` | Build scripts (`linux_build.py`, `windows_build.py`, `android_build.py`, `ci_build.py`), generators (`ce_menus.py`, `port_settings.py`, `hud_assets.py`, `title_assets.py`, `embed_assets.py`, `xdk_headers.py`) and tests |
+| `tools/` | Build scripts (`linux_build.py`, `windows_build.py`, `android_build.py`, `switch_build.py`, `ci_build.py`), generators (`ce_menus.py`, `port_settings.py`, `hud_assets.py`, `title_assets.py`, `embed_assets.py`, `xdk_headers.py`) and tests |
 | `docs/` | Longer design notes (`custom_edition_caches.md`) |
 | `pgo/` | Profile-guided optimisation profiles |
 | `assets/` | Game data for local runs (gitignored: `maps/`, `custom_maps/`) |
@@ -37,6 +39,7 @@ python configure.py            # debug build; add --release, --portable, --profi
 ninja linux                    # build/linux/halo
 ninja android                  # the Android guest image and native libraries
 ninja android_apk              # the APK (Gradle)
+ninja switch                   # build/switch/OpenCE.nro (needs devkitPro: port/switch/README.md)
 ninja windows                  # on Windows only
 python tools/ci_build.py linux release   # what CI builds
 ```
@@ -55,14 +58,21 @@ python tools/ci_build.py linux release   # what CI builds
   and only the SDL functions `guest_sdl.c` bridges. Run `ninja android`
   after changing anything it compiles: `port/linux/src`, `port/linux/game`,
   `port/android`, `source/`, the build scripts.
+- Switch: the same guest (`port/android/guest`, the same imports) with
+  `HALO_SWITCH` also defined, and its own host, `port/switch/host`. The host
+  must have a function for every import of `port/android/host_imports.list`:
+  after a change to that list, to `guest_sdl.c` or to `port/linux/src/gl.h`,
+  run `ninja switch` (it does not link otherwise) and add what is missing to
+  the host. CI does not build the Switch program.
 
 ### Defines
 
 | Define | Set by | Meaning |
 | --- | --- | --- |
-| `HALO_ANDROID` | Android | The app: its display, input, files and lifecycle |
-| `HALO_GLES` | Android | The OpenGL ES renderer |
-| `HALO_ARM64_GUEST` | Android | The guest's ABI (ILP32 AArch64) |
+| `HALO_ANDROID` | Android, Switch | The app: its display, input, files and lifecycle |
+| `HALO_GLES` | Android, Switch | The OpenGL ES renderer |
+| `HALO_ARM64_GUEST` | Android, Switch | The guest's ABI (ILP32 AArch64) |
+| `HALO_SWITCH` | Switch | The Switch program, where it differs from the Android app (with the three above) |
 | `HALO_WINDOWS` | Windows (`halo_windows_prefix.h`) | The Windows build |
 | `HALO_RELEASE` | `--release` | No assertions checked |
 | `HALO_PROFILE` | `--profile` | The profiling build; a normal build must be unchanged by it |
@@ -168,7 +178,7 @@ untrusted input: read them through bounds-checked readers. See
 A setting is an entry in `port/linux/src/port_config.c`, with a default, an
 environment variable and a comment that `config.toml` gets. Document it in
 the settings table of `port/linux/README.md` (and the Android README for an
-Android-only one). A departure from the stock game's look or behaviour
+Android-only one, the Switch README for a Switch-only one). A departure from the stock game's look or behaviour
 should be a setting, off or stock by default, unless the project decides
 otherwise.
 
@@ -198,6 +208,7 @@ as documentation of file formats, never copied.
 | [port/linux/NETCODE.md](port/linux/NETCODE.md) | The distributed netcode, network versions, joining a game in progress, transport, testing |
 | [port/windows/README.md](port/windows/README.md) | The Windows build, its headers, inline functions, crash reports |
 | [port/android/README.md](port/android/README.md) | The Android build, the guest and host, touch controls, Android settings, finding problems |
+| [port/switch/README.md](port/switch/README.md) | The Switch build, its host and render thread, Switch settings, finding problems, the profiler, the tests on a console |
 | [port/include/xdk/README.md](port/include/xdk/README.md) | How the SDK declarations were written and are checked |
 | [docs/custom_edition_caches.md](docs/custom_edition_caches.md) | Loading and converting Custom Edition maps, and the evidence for each layout |
 | [port/assets/menus/README.md](port/assets/menus/README.md) | The menu files' format and how to write them again |

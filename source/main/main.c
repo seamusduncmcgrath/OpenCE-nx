@@ -1717,7 +1717,9 @@ static void main_native_build_label(char *label, size_t capacity)
 {
 	char const *platform;
 
-	#ifdef HALO_ANDROID
+	#ifdef HALO_SWITCH
+	platform = "Switch";
+	#elif defined(HALO_ANDROID)
 	platform = "Android";
 	#elif defined(HALO_WINDOWS)
 	platform = "Windows";

@@ -34,6 +34,9 @@ Conventions carried over from the Xbox:
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#ifdef HALO_SWITCH
+#include <unistd.h>
+#endif
 
 void d3d8_surface_initialize(D3DSurface *surface, D3DFORMAT format, unsigned long width, unsigned long height);
 void d3d8_surface_resize(D3DSurface *surface, D3DFORMAT format, unsigned long width, unsigned long height);
@@ -74,8 +77,10 @@ The desktop also draws at that resolution (platform_screen_mode): render
 targets the size of the screen get that many pixels (screen_scale), and
 viewports, clears and visibility counts are scaled to match, so the game
 still works in its 480 lines; "original" draws 640x480, scaled up at
-presentation. The width and the scale change only between frames, after one
-is presented (halo_screen_commit). */
+presentation. The Switch does the same at its display's resolution, the
+television's in the dock and its own screen's out of it; Android draws the
+480 lines and scales them up. The width and the scale change only between
+frames, after one is presented (halo_screen_commit). */
 
 #define SCREEN_HEIGHT 480
 #define SCREEN_MAXIMUM_WIDTH 1920
@@ -186,6 +191,23 @@ static void screen_mode_choose(long *width, float scale[2])
 		*width = 1600;
 	*width &= ~1L;
 	scale[0] = scale[1] = 1.0f;
+#ifdef HALO_SWITCH
+	{
+		/* the Switch draws those lines with the pixels of its display, as
+		the desktop does (platform_screen_mode) */
+		long display_width, display_height;
+
+		if (platform_screen_mode(&display_width, &display_height) && display_height > SCREEN_HEIGHT)
+		{
+			long wanted = (SCREEN_HEIGHT * display_width + display_height / 2) / display_height;
+
+			scale[1] = (float)display_height / (float)SCREEN_HEIGHT;
+			/* a picture of the display's shape gets all of its columns;
+			another keeps its own, and the display blit letterboxes it */
+			scale[0] = labs(wanted - *width) <= 2 ? (float)display_width / (float)*width : scale[1];
+		}
+	}
+#endif
 #else
 	long display_width, display_height;
 
@@ -1518,6 +1540,10 @@ static BOOL bind_targets(BOOL *has_depth)
 
 /* ---------- device creation */
 
+#ifdef HALO_SWITCH
+static void shader_list_warm(void);
+#endif
+
 static void gl_initialize(void)
 {
 	GLint major = 0, minor = 0;
@@ -1665,6 +1691,9 @@ static void gl_initialize(void)
 		anti_aliasing_read();
 	else
 		anti_aliasing_prepare();
+#ifdef HALO_SWITCH
+	shader_list_warm();
+#endif
 }
 
 /* what display.anti_aliasing's value needs of the GL context, once there is
@@ -2173,6 +2202,9 @@ HRESULT WINAPI D3DDevice_EndVisibilityTest(DWORD index)
 			(*count)++;
 		}
 		device.query_pending[index] = TRUE;
+		/* (the counter counts the target's pixels: one a pixel, whatever
+		its samples) */
+		device.query_area[index] = target_scale[0] * target_scale[1];
 		return S_OK;
 	}
 #endif
@@ -2207,7 +2239,6 @@ HRESULT WINAPI D3DDevice_EndVisibilityTest(DWORD index)
 	return S_OK;
 }
 
-#ifndef HALO_GLES
 /* a count of pixels in the game's pixels */
 static GLuint visibility_unscaled(GLuint samples, DWORD index)
 {
@@ -2216,7 +2247,6 @@ static GLuint visibility_unscaled(GLuint samples, DWORD index)
 	return area > 1.0f ? (GLuint)(samples / area + 0.5f) : samples;
 }
 
-#endif
 HRESULT WINAPI D3DDevice_GetVisibilityTestResult(DWORD index, UINT *result, ULONGLONG *time_stamp)
 {
 	GLuint available = 0, samples = 0;
@@ -2615,6 +2645,100 @@ static unsigned long hash_words(const void *data, unsigned long size)
 	return hash;
 }
 
+#ifdef HALO_SWITCH
+/* ---------- the programs of earlier runs
+
+The Mesa of the Switch compiles a program in a tenth of a second or more,
+on the thread that draws, in the frame that first draws with it; it keeps
+none of that once the game ends (it has no cache on a disk, and gives no
+program binaries to keep). So in every run the game stopped each time
+something new came into view.
+
+The texts of each program's two shaders are written to shader_list.bin in
+the data folder as the game links it (shader_list_record), and the programs
+of that file are made before the first frame of the next run
+(shader_list_warm), with a bar that shows how far along it is. A shader of
+a text that was compiled before is that shader (shader_compile), and so its
+programs are the ones made already: the game finds them as it finds any it
+has linked itself. display.precompile_shaders = false leaves all of it out. */
+
+struct compiled_shader
+{
+	struct compiled_shader *next;
+	unsigned long long hash;
+	GLenum type;
+	GLuint shader;
+	char *source;
+};
+
+#define COMPILED_SHADER_BUCKETS 1024
+
+static struct compiled_shader *compiled_shaders[COMPILED_SHADER_BUCKETS];
+
+static unsigned long long shader_text_hash(GLenum type, const char *text)
+{
+	unsigned long long hash = 14695981039346656037ULL ^ type;
+
+	for (; *text; text++)
+		hash = (hash ^ (unsigned char)*text) * 1099511628211ULL;
+	return hash;
+}
+
+/* xgpu_compile_shader, once for each text */
+static GLuint shader_compile(GLenum type, const char *source, const char *what)
+{
+	unsigned long long hash = shader_text_hash(type, source);
+	struct compiled_shader **bucket = &compiled_shaders[hash % COMPILED_SHADER_BUCKETS];
+	struct compiled_shader *entry;
+	GLuint shader;
+
+	for (entry = *bucket; entry; entry = entry->next)
+	{
+		if (entry->hash == hash && entry->type == type && !strcmp(entry->source, source))
+			return entry->shader;
+	}
+	shader = xgpu_compile_shader(type, source, what);
+	if (!shader)
+		return 0;
+	entry = calloc(1, sizeof(*entry));
+	if (entry)
+		entry->source = strdup(source);
+	if (!entry || !entry->source)
+	{
+		free(entry);
+		return shader;
+	}
+	entry->hash = hash;
+	entry->type = type;
+	entry->shader = shader;
+	entry->next = *bucket;
+	*bucket = entry;
+	return shader;
+}
+
+/* the text a shader was compiled from */
+static const struct compiled_shader *shader_compiled_find(GLuint shader)
+{
+	unsigned long bucket;
+
+	for (bucket = 0; bucket < COMPILED_SHADER_BUCKETS; bucket++)
+	{
+		const struct compiled_shader *entry;
+
+		for (entry = compiled_shaders[bucket]; entry; entry = entry->next)
+		{
+			if (entry->shader == shader)
+				return entry;
+		}
+	}
+	return NULL;
+}
+
+static void shader_list_record(GLuint vertex_shader, GLuint fragment_shader);
+#else
+#define shader_compile xgpu_compile_shader
+#endif
+
 /* lit: the shader that hands the lighting's normal and position on
 (vertex_shader_object lit_shader) */
 static GLuint vertex_shader_get(struct vertex_shader_object *program, BOOL immediate, BOOL lit)
@@ -2629,7 +2753,7 @@ static GLuint vertex_shader_get(struct vertex_shader_object *program, BOOL immed
 			immediate ? 0 : device.vertex_shader->packed_mask, lit ? &program->lighting : NULL);
 
 		program->shaders_tried |= tried;
-		*shader = xgpu_compile_shader(GL_VERTEX_SHADER, source, "vertex");
+		*shader = shader_compile(GL_VERTEX_SHADER, source, "vertex");
 		if (debug_settings.dump_shaders)
 		{
 			char path[512];
@@ -2681,7 +2805,7 @@ static GLuint fragment_shader_get(const struct nv2a_pixel_shader_key *key)
 	entry->hash = hash;
 	entry->key = *key;
 	source = nv2a_pixel_shader_to_glsl(key);
-	entry->shader = xgpu_compile_shader(GL_FRAGMENT_SHADER, source, "pixel");
+	entry->shader = shader_compile(GL_FRAGMENT_SHADER, source, "pixel");
 	if (debug_settings.dump_shaders)
 	{
 		char path[512];
@@ -2733,6 +2857,9 @@ static struct program_entry *program_get(GLuint vertex_shader, GLuint fragment_s
 	entry->program = xgpu_link_program(vertex_shader, fragment_shader, "shader");
 	if (!entry->program)
 		return NULL;
+#ifdef HALO_SWITCH
+	shader_list_record(vertex_shader, fragment_shader);
+#endif
 	state_program(entry->program);
 	entry->constants = glGetUniformLocation(entry->program, "c");
 	entry->constant_count = XGPU_VERTEX_CONSTANT_COUNT;
@@ -2789,6 +2916,221 @@ static struct program_entry *program_get(GLuint vertex_shader, GLuint fragment_s
 	last = entry;
 	return entry;
 }
+
+#ifdef HALO_SWITCH
+/* shader_list.bin: the header, then for each program the sizes of its two
+texts (each with its end) and the texts */
+#define SHADER_LIST_MAGIC 0x4c53434fUL
+#define SHADER_LIST_VERSION 1
+#define SHADER_LIST_MAXIMUM_PROGRAMS 4096
+#define SHADER_LIST_MAXIMUM_TEXT 0x80000UL
+
+struct shader_list_header
+{
+	unsigned int magic;
+	unsigned int version;
+	/* the build that wrote the texts: the programs of another are of other
+	texts, which nothing would draw with */
+	char build[40];
+};
+
+static struct
+{
+	BOOL enabled;
+	/* the file has its header */
+	BOOL started;
+	/* its programs are being made: they are not written to it again */
+	BOOL warming;
+	char path[600];
+	unsigned long count;
+	/* a number for each program of the file, of its two texts */
+	unsigned long long programs[SHADER_LIST_MAXIMUM_PROGRAMS];
+} shader_list;
+
+static void shader_list_header_fill(struct shader_list_header *header)
+{
+	memset(header, 0, sizeof(*header));
+	header->magic = SHADER_LIST_MAGIC;
+	header->version = SHADER_LIST_VERSION;
+	snprintf(header->build, sizeof(header->build), "%s %s", __DATE__, __TIME__);
+}
+
+static unsigned long long shader_list_program(unsigned long long vertex_hash, unsigned long long fragment_hash)
+{
+	return vertex_hash * 0x9e3779b97f4a7c15ULL ^ fragment_hash;
+}
+
+static BOOL shader_list_has(unsigned long long program)
+{
+	unsigned long index;
+
+	for (index = 0; index < shader_list.count; index++)
+	{
+		if (shader_list.programs[index] == program)
+			return TRUE;
+	}
+	return FALSE;
+}
+
+/* a program the game has linked, added to the file */
+static void shader_list_record(GLuint vertex_shader, GLuint fragment_shader)
+{
+	const struct compiled_shader *vertex, *fragment;
+	unsigned long long program;
+	unsigned int sizes[2];
+	FILE *file;
+
+	if (!shader_list.enabled || shader_list.warming || shader_list.count >= SHADER_LIST_MAXIMUM_PROGRAMS)
+		return;
+	vertex = shader_compiled_find(vertex_shader);
+	fragment = shader_compiled_find(fragment_shader);
+	if (!vertex || !fragment)
+		return;
+	program = shader_list_program(vertex->hash, fragment->hash);
+	if (shader_list_has(program))
+		return;
+	sizes[0] = (unsigned int)strlen(vertex->source) + 1;
+	sizes[1] = (unsigned int)strlen(fragment->source) + 1;
+	if (sizes[0] > SHADER_LIST_MAXIMUM_TEXT || sizes[1] > SHADER_LIST_MAXIMUM_TEXT)
+		return;
+	file = fopen(shader_list.path, shader_list.started ? "ab" : "wb");
+	if (!file)
+		return;
+	if (!shader_list.started)
+	{
+		struct shader_list_header header;
+
+		shader_list_header_fill(&header);
+		fwrite(&header, sizeof(header), 1, file);
+		shader_list.started = TRUE;
+	}
+	fwrite(sizes, sizeof(sizes), 1, file);
+	fwrite(vertex->source, sizes[0], 1, file);
+	fwrite(fragment->source, sizes[1], 1, file);
+	fclose(file);
+	shader_list.programs[shader_list.count++] = program;
+}
+
+/* how far the programs are along: a bar on a black screen */
+static void shader_list_show(float done)
+{
+	int width = 0, height = 0, bar_width, bar_height, x, y;
+
+	platform_video_drawable_size(&width, &height);
+	if (width <= 0 || height <= 0)
+		return;
+	bar_width = width / 2;
+	bar_height = height / 60 > 4 ? height / 60 : 4;
+	x = (width - bar_width) / 2;
+	y = height / 5;
+	glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+	glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+	glDisable(GL_SCISSOR_TEST);
+	glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+	glClear(GL_COLOR_BUFFER_BIT);
+	glEnable(GL_SCISSOR_TEST);
+	glScissor(x, y, bar_width, bar_height);
+	glClearColor(0.12f, 0.12f, 0.12f, 1.0f);
+	glClear(GL_COLOR_BUFFER_BIT);
+	glScissor(x, y, (GLsizei)((float)bar_width * (done < 0.0f ? 0.0f : done > 1.0f ? 1.0f : done)), bar_height);
+	glClearColor(0.45f, 0.65f, 0.3f, 1.0f);
+	glClear(GL_COLOR_BUFFER_BIT);
+	glDisable(GL_SCISSOR_TEST);
+	platform_video_swap();
+}
+
+static double shader_list_seconds(void)
+{
+	struct timespec now;
+
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	return (double)now.tv_sec + (double)now.tv_nsec / 1.0e9;
+}
+
+/* makes the programs of the file, once the context is ready and before the
+game draws */
+static void shader_list_warm(void)
+{
+	struct shader_list_header header, expected;
+	double started = shader_list_seconds(), shown = started;
+	long size, good;
+	unsigned long made = 0;
+	FILE *file;
+
+	shader_list.enabled = config_boolean("display.precompile_shaders");
+	if (!shader_list.enabled)
+		return;
+	snprintf(shader_list.path, sizeof(shader_list.path), "%s/shader_list.bin", platform_data_root());
+	file = fopen(shader_list.path, "rb");
+	if (!file)
+		return;
+	shader_list_header_fill(&expected);
+	if (fread(&header, sizeof(header), 1, file) != 1 || memcmp(&header, &expected, sizeof(header)))
+	{
+		/* (the first program linked starts the file again) */
+		fclose(file);
+		platform_log("shader list: %s is of another build: started again", shader_list.path);
+		return;
+	}
+	shader_list.started = TRUE;
+	fseek(file, 0, SEEK_END);
+	size = ftell(file);
+	good = (long)sizeof(header);
+	fseek(file, good, SEEK_SET);
+	shader_list.warming = TRUE;
+	while (shader_list.count < SHADER_LIST_MAXIMUM_PROGRAMS)
+	{
+		unsigned int sizes[2];
+		char *vertex_text, *fragment_text;
+		BOOL complete;
+
+		if (fread(sizes, sizeof(sizes), 1, file) != 1)
+			break;
+		if (sizes[0] < 2 || sizes[1] < 2 || sizes[0] > SHADER_LIST_MAXIMUM_TEXT || sizes[1] > SHADER_LIST_MAXIMUM_TEXT)
+			break;
+		vertex_text = malloc(sizes[0]);
+		fragment_text = malloc(sizes[1]);
+		complete = vertex_text && fragment_text && fread(vertex_text, sizes[0], 1, file) == 1 &&
+			fread(fragment_text, sizes[1], 1, file) == 1 && !vertex_text[sizes[0] - 1] && !fragment_text[sizes[1] - 1];
+		if (complete)
+		{
+			GLuint vertex_shader = shader_compile(GL_VERTEX_SHADER, vertex_text, "vertex");
+			GLuint fragment_shader = shader_compile(GL_FRAGMENT_SHADER, fragment_text, "pixel");
+
+			shader_list.programs[shader_list.count++] = shader_list_program(
+				shader_text_hash(GL_VERTEX_SHADER, vertex_text), shader_text_hash(GL_FRAGMENT_SHADER, fragment_text));
+			if (vertex_shader && fragment_shader && program_get(vertex_shader, fragment_shader))
+				made++;
+			good = ftell(file);
+		}
+		free(vertex_text);
+		free(fragment_text);
+		if (!complete)
+			break;
+		if (shader_list_seconds() - shown >= 0.2)
+		{
+			shown = shader_list_seconds();
+			shader_list_show(size > 0 ? (float)good / (float)size : 1.0f);
+		}
+	}
+	shader_list.warming = FALSE;
+	fclose(file);
+	/* what is after the last whole program (the game ended as it wrote one)
+	is cut off, for the next to follow on */
+	if (good < size)
+	{
+		file = fopen(shader_list.path, "r+b");
+		if (!file || ftruncate(fileno(file), good) != 0)
+			shader_list.started = FALSE;
+		if (file)
+			fclose(file);
+	}
+	if (shown != started)
+		shader_list_show(1.0f);
+	xgpu_gl_state_invalidate();
+	platform_log("shader list: %lu programs of earlier runs made in %.1f s", made, shader_list_seconds() - started);
+}
+#endif
 
 /* ---------- per-draw state */
 
@@ -5109,8 +5451,10 @@ void WINAPI D3DDevice_Present(CONST RECT *source_rectangle, CONST RECT *destinat
 				device.counter_values);
 			for (test = 0; test < device.ring_test_count[ring]; test++)
 			{
-				device.visibility_latest[device.ring_tests[ring][test][0]] =
-					device.counter_values[device.ring_tests[ring][test][1]];
+				DWORD slot = device.ring_tests[ring][test][0];
+
+				device.visibility_latest[slot] =
+					visibility_unscaled(device.counter_values[device.ring_tests[ring][test][1]], slot);
 			}
 			device.ring_test_count[ring] = 0;
 		}

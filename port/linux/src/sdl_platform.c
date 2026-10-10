@@ -892,6 +892,33 @@ void platform_video_drawable_size(int *width, int *height)
 	SDL_GetWindowSizeInPixels(platform_window, width, height);
 }
 
+#ifdef HALO_SWITCH
+/* the size in pixels the Switch draws its picture at (d3d8_gl.c): its
+display's, the television's in the dock (1920x1080) and the console's own
+screen's out of it (1280x720), or as many of the display's lines as
+display.docked_height and display.handheld_height say, which the display
+blit scales up. Before the window opens, what it will be: the program gives
+the display's size for no window (port/switch/host/host_sdl.c). */
+BOOL platform_screen_mode(long *width, long *height)
+{
+	int pixel_width = 0, pixel_height = 0;
+	long lines;
+
+	SDL_GetWindowSizeInPixels(platform_window, &pixel_width, &pixel_height);
+	if (pixel_width <= 0 || pixel_height <= 0)
+		return FALSE;
+	/* (the console's own screen has 720 lines) */
+	lines = config_integer(pixel_height > 720 ? "display.docked_height" : "display.handheld_height");
+	if (lines <= 0 || lines > pixel_height)
+		lines = pixel_height;
+	if (lines < 480)
+		lines = 480;
+	*width = ((long)pixel_width * lines + pixel_height / 2) / pixel_height;
+	*height = lines;
+	return TRUE;
+}
+#endif
+
 #ifndef HALO_ANDROID
 /* with vsync off, the time between frames display.max_fps asks for (0:
 twice the display's refresh rate), or 0 for no limit. A GPU never left idle

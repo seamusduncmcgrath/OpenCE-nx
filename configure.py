@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 # root build script: writes build.ninja for the native ports (Linux, Windows,
-# Android)
+# Android, Nintendo Switch)
 
 import argparse
 import io
@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from tools import ninja_syntax
 from tools.android_build import android_configure_inputs, generate_android_build
 from tools.linux_build import check_profile_options, generate_linux_build, linux_configure_inputs
+from tools.switch_build import generate_switch_build, switch_configure_inputs
 from tools.windows_build import generate_windows_build, windows_configure_inputs
 
 # arguments
@@ -83,6 +84,16 @@ parser.add_argument(
     type=str,
     help="clang with the arm64_32 target for the Android guest (default: clang)",
 )
+parser.add_argument(
+    "--devkitpro",
+    type=str,
+    help="devkitPro, with devkitA64, libnx and switch-mesa, for `ninja switch` (default: DEVKITPRO)",
+)
+parser.add_argument(
+    "--switch-guest-cc",
+    type=str,
+    help="clang with the arm64_32 target for the Switch guest (default: clang, or LLVM's in Program Files)",
+)
 args = parser.parse_args()
 try:
     check_profile_options(args.profile, args.pgo)
@@ -102,6 +113,8 @@ sln = SimpleNamespace(
     port_pgo_profile=args.pgo_profile,
     android_ndk=args.android_ndk,
     android_guest_cc=args.android_guest_cc,
+    devkitpro=args.devkitpro,
+    switch_guest_cc=args.switch_guest_cc,
 )
 
 
@@ -126,6 +139,7 @@ n.newline()
 
 generate_linux_build(n, sln)
 generate_android_build(n, sln)
+generate_switch_build(n, sln)
 generate_windows_build(n, sln)
 
 n.comment("Reconfigure on change")
@@ -143,6 +157,7 @@ n.build(
         Path("tools/ninja_syntax.py"),
         *linux_configure_inputs(),
         *android_configure_inputs(),
+        *switch_configure_inputs(),
         *windows_configure_inputs(),
     ],
 )

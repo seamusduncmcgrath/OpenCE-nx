@@ -22,6 +22,8 @@ builds of the latest release:
 | Linux | [halo-linux-release.zip](https://github.com/OpenCommunityEdition/OpenCE/releases/latest/download/halo-linux-release.zip) | [halo-linux-debug.zip](https://github.com/OpenCommunityEdition/OpenCE/releases/latest/download/halo-linux-debug.zip) |
 | Windows | [halo-windows-release.zip](https://github.com/OpenCommunityEdition/OpenCE/releases/latest/download/halo-windows-release.zip) | [halo-windows-debug.zip](https://github.com/OpenCommunityEdition/OpenCE/releases/latest/download/halo-windows-debug.zip) |
 | Android | [halo-android-release.zip](https://github.com/OpenCommunityEdition/OpenCE/releases/latest/download/halo-android-release.zip) | [halo-android-debug.zip](https://github.com/OpenCommunityEdition/OpenCE/releases/latest/download/halo-android-debug.zip) |
+| Switch | [OpenCE.nro](https://github.com/seamusduncmcgrath/OpenCE-nx/releases/latest/download/OpenCE.nro)
+
 
 Use the release build to play. The debug build stops at the first failed
 assertion and writes it to the log. Use the debug build to find and report
@@ -44,13 +46,10 @@ operate. The maps of the European (PAL) version were made for a slower
 console. The port changes them to play as the North American (NTSC) maps do,
 so players of the two versions can play together.
 
-1. Start the game.
-2. At the first start, the game asks for the disc image. Select it.
-3. The game extracts the `maps/` folder. Then the game starts.
+1. Extract the `maps` folder from your `.iso`/`.xiso`.
+2. Put `OpenCE.nro` from the releases tab in your SD cards `switch` folder.
+3. Make a new folder named `OpenCE` in your `switch` folder and place your extracted `maps` folder in there.
 
-On Linux and Windows, the game puts `maps/` next to the executable. On
-Android, copy the disc image to the phone first. The app puts `maps/` in its
-data folder. Refer to [port/android/README.md](port/android/README.md).
 
 ## Platforms
 
@@ -61,6 +60,7 @@ Each platform has its own instructions:
 | Linux (32-bit x86 executable, OpenGL 4.5, SDL3) | [port/linux/README.md](port/linux/README.md) |
 | Windows (32-bit x86 executable, OpenGL 4.5, SDL3) | [port/windows/README.md](port/windows/README.md) |
 | Android (arm64 app, OpenGL ES 3, SDL3) | [port/android/README.md](port/android/README.md) |
+| Nintendo Switch (homebrew, OpenGL ES 3, SDL2, libnx) | [port/switch/README.md](port/switch/README.md) |
 
 The Linux README also gives the controls, the settings and the multiplayer
 functions. These are almost the same on all platforms.
@@ -95,6 +95,7 @@ To build the game:
 | `ninja linux` | `build/linux/halo` |
 | `ninja windows` (on Windows) | `build/windows/halo.exe` and `SDL3.dll` |
 | `ninja android_apk` | `port/android/app/build/outputs/apk/debug/app-debug.apk` |
+| `ninja switch` | `build/switch/OpenCE.nro` |
 
 If you enter `ninja` without a target, ninja builds the game for the
 computer that you use.

@@ -50,16 +50,33 @@ turns the reverb off; audio.enabled = false skips opening a device
 #define OUTPUT_RATE 48000
 #define OUTPUT_CHANNELS 2
 #define MAXIMUM_STREAM_PACKETS 64
+#ifdef HALO_SWITCH
+/* (the mixer holds its lock, which each of the game's sound calls waits
+for, while it mixes a chunk: shorter ones, on a console whose mixer is busy
+for most of the time) */
+#define MIX_CHUNK_FRAMES 256
+#else
 #define MIX_CHUNK_FRAMES 1024
+#endif
 
 #define XBOX_ADPCM_BLOCK_BYTES 36
 #define XBOX_ADPCM_BLOCK_SAMPLES 64
 
 /* the resampler (resampling) */
+#ifdef HALO_SWITCH
+/* A voice costs the Switch's 1 GHz cores as its taps: 48 for each voice were
+most of a core in a firefight. A third of them, and a window that suits so
+few: a 22 kHz voice is 0.8 dB down at 9 kHz, and its images are 53 to 60 dB
+down below that (above it they rise to 18 dB down at the very top of its
+band, where there is little to hear). */
+#define RESAMPLER_ZERO_CROSSINGS 8
+#define RESAMPLER_KAISER_BETA 5.0
+#else
 #define RESAMPLER_ZERO_CROSSINGS 24
+#define RESAMPLER_KAISER_BETA 6.5
+#endif
 #define RESAMPLER_TABLE_STEPS 256
 #define RESAMPLER_CUTOFF 0.96
-#define RESAMPLER_KAISER_BETA 6.5
 #define RESAMPLER_MAXIMUM_STRETCH 2
 #define RESAMPLER_HISTORY 128
 #if defined(__GNUC__) || defined(__clang__)
@@ -685,6 +702,22 @@ static BOOL voice_has_frames(struct sdl_stream *stream)
 
 /* ---------- mixing */
 
+#ifdef HALO_SWITCH
+/* 80 dB under full scale: under the noise of what is heard with it, and of
+16-bit sound by itself. The Switch's mixer does not mix a voice that is
+quieter all through a chunk (a sound far off, which the game keeps playing);
+the other builds leave out only a voice turned all the way down. */
+#define INAUDIBLE_GAIN 1.0e-4f
+
+/* the voices mixed since the last report of them (mix): all, those too
+quiet to hear, and those played faster than the output rate, which cost
+more */
+static struct
+{
+	unsigned long chunks, voices, inaudible, fast;
+} mix_statistics;
+#endif
+
 /* mixes one voice into output (frames of stereo float), and into the reverb's
 send (frames of mono) */
 static void mix_voice(struct sdl_stream *stream, float *output, float *send, unsigned long frames)
@@ -698,6 +731,9 @@ static void mix_voice(struct sdl_stream *stream, float *output, float *send, uns
 	unsigned long frame;
 	/* (a stereo voice panned towards its sound: voice_gains) */
 	BOOL positioned = stream->channels == 2 && stream->stereo_positioned;
+#ifdef HALO_SWITCH
+	BOOL inaudible;
+#endif
 
 	if (stream->paused || !stream->packet_count || !stream->sample_rate)
 		return;
@@ -743,6 +779,17 @@ static void mix_voice(struct sdl_stream *stream, float *output, float *send, uns
 	ramp_room = (target_room - room) / (float)frames;
 	ramp_direct_lowpass = (target_direct_lowpass - direct_lowpass) / (float)frames;
 	ramp_room_lowpass = (target_room_lowpass - room_lowpass) / (float)frames;
+#ifdef HALO_SWITCH
+	/* (through the chunk: at its start and at its end) */
+	inaudible = fabsf(left) < INAUDIBLE_GAIN && fabsf(right) < INAUDIBLE_GAIN && fabsf(room) < INAUDIBLE_GAIN &&
+		fabsf(target_left) < INAUDIBLE_GAIN && fabsf(target_right) < INAUDIBLE_GAIN &&
+		fabsf(target_room) < INAUDIBLE_GAIN;
+	mix_statistics.voices++;
+	if (inaudible)
+		mix_statistics.inaudible++;
+	else if (scale != 1.0f)
+		mix_statistics.fast++;
+#endif
 
 	for (frame = 0; frame < frames; frame++)
 	{
@@ -772,7 +819,11 @@ static void mix_voice(struct sdl_stream *stream, float *output, float *send, uns
 		if (stream->silence > (unsigned long)(2 * width))
 			break;
 
+#ifdef HALO_SWITCH
+		if (inaudible)
+#else
 		if (!left && !right && !room && !ramp_left && !ramp_right && !ramp_room)
+#endif
 		{
 			/* a voice turned all the way down (out of earshot), and not
 			sending to the reverb, only moves on */
@@ -1267,6 +1318,23 @@ static void mix(float *output, unsigned long frames)
 	pthread_mutex_lock(&mixer_lock);
 	for (stream = streams; stream; stream = stream->next)
 		mix_voice(stream, output, reverb.send, frames);
+#ifdef HALO_SWITCH
+	/* with debug.profile, what the mixer had to do, every ten seconds or so */
+	if (++mix_statistics.chunks >= 10 * OUTPUT_RATE / MIX_CHUNK_FRAMES)
+	{
+		static int reported = -1;
+
+		if (reported < 0)
+			reported = config_boolean("debug.profile");
+		if (reported)
+		{
+			platform_log("mixer: %lu voices a chunk, %lu of them too quiet to mix and %lu fast",
+				mix_statistics.voices / mix_statistics.chunks, mix_statistics.inaudible / mix_statistics.chunks,
+				mix_statistics.fast / mix_statistics.chunks);
+		}
+		memset(&mix_statistics, 0, sizeof(mix_statistics));
+	}
+#endif
 	/* a new environment, once the fade to the last is over */
 	if (reverb.serial != environment_serial && !reverb.fade)
 	{
